@@ -41,6 +41,7 @@ class Diagram:
     __directions = ("TB", "BT", "LR", "RL")
     __curvestyles = ("ortho", "curved")
     __outformats = ("png", "jpg", "svg", "pdf")
+    __embedformats = ("png", "jpg",)
 
     # fmt: off
     _default_graph_attrs = {
@@ -85,6 +86,7 @@ class Diagram:
         graph_attr: dict = {},
         node_attr: dict = {},
         edge_attr: dict = {},
+        embed = False,
     ):
         """Diagram represents a global diagrams context.
 
@@ -102,7 +104,7 @@ class Diagram:
         """
         self.name = name
         if not name and not filename:
-          filename = "diagrams_image"
+            filename = "diagrams_image"
         elif not filename:
             filename = "_".join(self.name.split()).lower()
         self.filename = filename
@@ -136,6 +138,8 @@ class Diagram:
 
         self.show = show
 
+        self.embed = embed
+
     def __str__(self) -> str:
         return str(self.dot)
 
@@ -145,9 +149,55 @@ class Diagram:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.render()
+        if self.embed:
+            self._embed_svg()
         # Remove the graphviz file leaving only the image.
         os.remove(self.filename)
         setdiagram(None)
+
+    def _embed_svg(self):
+        """
+        Process svg href here
+        <image xlink:href="..." .../>
+        <image xlink:href="data:image/png;base64,..." .../>
+        """
+        if self.outformat != 'svg':
+            return
+
+        from lxml import etree
+        from base64 import b64encode
+        import os
+
+        path = self.filename + '.svg'
+
+        xml = etree.parse(path)
+        svg = xml.getroot()
+
+        # Mention: must give svg namespace
+        tag_image = './/{http://www.w3.org/2000/svg}image'
+        tag_href = '{http://www.w3.org/1999/xlink}href'
+
+        for img in svg.findall(tag_image):
+            rsc = img.attrib.get(tag_href, None)
+
+            # Only process local image files
+            if rsc is None or not os.path.exists(rsc):
+                continue
+
+            # Only support some pre-define type
+            ext = rsc.split('.')[-1]
+            if ext not in self.__embedformats:
+                continue
+
+            # Use base64 to embed the image resource
+            with open(rsc, 'rb') as data:
+                b = data.read()
+                code = b64encode(b)
+                img.attrib[tag_href] = 'data:image/{};base64,{}'.format(
+                    ext, code.decode())
+
+        # Write back to the svg file
+        etree.ElementTree(svg).write(path)
 
     def _repr_png_(self):
         return self.dot.pipe(format="png")
